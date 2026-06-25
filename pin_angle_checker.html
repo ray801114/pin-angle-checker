@@ -103,7 +103,9 @@
     <div class="report-section">
       <h3>整體結果</h3>
       <div class="stat-row"><span class="label">錄影時長</span><span class="value" id="r-duration">--</span></div>
-      <div class="stat-row"><span class="label">最大角度差（峰值）</span><span class="value" id="r-maxangle">--</span></div>
+      <div class="stat-row"><span class="label">偵測到 Pin 數</span><span class="value" id="r-pincount">--</span></div>
+      <div class="stat-row"><span class="label">整體最大角度差</span><span class="value" id="r-overallmax">--</span></div>
+      <div class="stat-row"><span class="label">超標峰值角度</span><span class="value" id="r-maxangle">--</span></div>
       <div class="stat-row"><span class="label">超過 10° 次數</span><span class="value" id="r-events">--</span></div>
       <div class="stat-row"><span class="label">判定</span><span class="value" id="r-verdict">--</span></div>
     </div>
@@ -118,6 +120,7 @@
 <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady()"></script>
 <script>
 let cv=null,isRecording=false,recordStart=null,timerInterval=null,alertEvents=[],alertCount=0,lastAlertTime=-3000,processingFrame=false;
+let pinCountSamples=[],overallMaxAngle=null;
 const MARKER_SIZE_METERS=0.008,ANGLE_THRESHOLD=10.0,MIN_MARKERS=2;
 let cameraMatrix=null,distCoeffs=null;
 function onOpenCvReady(){
@@ -163,6 +166,7 @@ function processFrame(){
     const corners=new cv.MatVector(),ids=new cv.Mat(),rejected=new cv.MatVector(),parameters=new cv.aruco_DetectorParameters();
     cv.aruco.detectMarkers(gray,dictionary,corners,ids,parameters,rejected);
     const numMarkers=ids.rows;
+    if(isRecording)pinCountSamples.push(numMarkers);
     if(numMarkers>=MIN_MARKERS){
       document.getElementById('no-detect-hint').style.display='none';
       const rvecs=new cv.Mat(),tvecs=new cv.Mat();
@@ -179,6 +183,7 @@ function processFrame(){
       for(let i=0;i<axes.length;i++)for(let j=i+1;j<axes.length;j++){const a=angleBetween(axes[i],axes[j]);if(a>maxAngle){maxAngle=a;maxPair=[markerIds[i],markerIds[j]];}}
       drawMarkers(ctx,corners,ids,maxAngle,overlay.width,overlay.height,video.videoWidth,video.videoHeight);
       updateUI(maxAngle,numMarkers,markerIds,axes);
+      if(isRecording&&(overallMaxAngle===null||maxAngle>overallMaxAngle))overallMaxAngle=maxAngle;
       const now=Date.now();
       if(maxAngle>ANGLE_THRESHOLD){
         document.getElementById('alert-overlay').classList.add('active');
@@ -225,12 +230,22 @@ function updateUI(maxAngle,numMarkers,markerIds,axes){
   pinItems.innerHTML=html;
 }
 document.getElementById('record-btn').addEventListener('click',()=>{isRecording?stopRecording():startRecording();});
-function startRecording(){isRecording=true;recordStart=Date.now();alertEvents=[];alertCount=0;lastAlertTime=-3000;document.getElementById('record-btn').classList.add('recording');document.getElementById('event-count').textContent='警告: 0 次';document.getElementById('status-text').textContent='● 錄影中';timerInterval=setInterval(()=>{const e=Math.floor((Date.now()-recordStart)/1000);document.getElementById('timer').textContent=String(Math.floor(e/60)).padStart(2,'0')+':'+String(e%60).padStart(2,'0');},500);}
+function startRecording(){isRecording=true;recordStart=Date.now();alertEvents=[];alertCount=0;lastAlertTime=-3000;pinCountSamples=[];overallMaxAngle=null;document.getElementById('record-btn').classList.add('recording');document.getElementById('event-count').textContent='警告: 0 次';document.getElementById('status-text').textContent='● 錄影中';timerInterval=setInterval(()=>{const e=Math.floor((Date.now()-recordStart)/1000);document.getElementById('timer').textContent=String(Math.floor(e/60)).padStart(2,'0')+':'+String(e%60).padStart(2,'0');},500);}
 function stopRecording(){isRecording=false;clearInterval(timerInterval);document.getElementById('record-btn').classList.remove('recording');document.getElementById('status-text').textContent='攝影機就緒';showReport();}
 function showReport(){
   const dur=(Date.now()-recordStart)/1000;
   document.getElementById('report-date').textContent=new Date().toLocaleString('zh-TW');
   document.getElementById('r-duration').textContent=String(Math.floor(dur/60)).padStart(2,'0')+':'+String(Math.floor(dur%60)).padStart(2,'0');
+  const pcEl=document.getElementById('r-pincount');
+  if(pinCountSamples.length===0){pcEl.textContent='無資料';pcEl.className='value danger';}
+  else{
+    const minC=Math.min(...pinCountSamples),maxC=Math.max(...pinCountSamples);
+    pcEl.textContent=(minC===maxC?(minC+' 根'):(minC+'–'+maxC+' 根（偵測不穩定）'));
+    pcEl.className=minC<MIN_MARKERS?'value danger':'value ok';
+  }
+  const omEl=document.getElementById('r-overallmax');
+  if(overallMaxAngle===null){omEl.textContent='--';omEl.className='value';}
+  else{omEl.textContent=overallMaxAngle.toFixed(1)+'°';omEl.className=overallMaxAngle>ANGLE_THRESHOLD?'value danger':'value ok';}
   const peak=alertEvents.length>0?Math.max(...alertEvents.map(e=>e.angle)):null;
   const peakEl=document.getElementById('r-maxangle');
   if(peak){peakEl.textContent=peak.toFixed(1)+'°';peakEl.className='value danger';}else{peakEl.textContent='< 10°（無超標）';peakEl.className='value ok';}
