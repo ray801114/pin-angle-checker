@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>一日長城 Pin 角度檢測</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a0a; color: #fff; font-family: -apple-system, sans-serif; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+  #status-bar { background: #111; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; z-index: 10; }
+  #status-text { font-size: 13px; color: #aaa; }
+  #opencv-status { font-size: 11px; padding: 3px 8px; border-radius: 10px; background: #333; color: #aaa; }
+  #opencv-status.ready { background: #1a3a1a; color: #4caf50; }
+  #camera-container { position: relative; flex: 1; display: flex; align-items: center; justify-content: center; background: #000; overflow: hidden; }
+  #video { position: absolute; width: 100%; height: 100%; object-fit: cover; }
+  #overlay { position: absolute; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+  #alert-overlay { position: absolute; inset: 0; border: 6px solid #ff3333; pointer-events: none; opacity: 0; transition: opacity 0.1s; box-shadow: inset 0 0 40px rgba(255,50,50,0.4); }
+  #alert-overlay.active { opacity: 1; }
+  #angle-display { position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,0.75); border-radius: 10px; padding: 10px 14px; min-width: 160px; backdrop-filter: blur(6px); }
+  #angle-display h3 { font-size: 11px; color: #888; margin-bottom: 6px; letter-spacing: 1px; text-transform: uppercase; }
+  #max-angle-value { font-size: 36px; font-weight: 700; line-height: 1; }
+  #max-angle-value.ok { color: #4caf50; }
+  #max-angle-value.warn { color: #ff9800; }
+  #max-angle-value.danger { color: #ff3333; }
+  #max-angle-label { font-size: 11px; color: #888; margin-top: 2px; }
+  #pin-list { position: absolute; top: 12px; right: 12px; background: rgba(0,0,0,0.75); border-radius: 10px; padding: 10px 14px; backdrop-filter: blur(6px); min-width: 110px; }
+  #pin-list h3 { font-size: 11px; color: #888; margin-bottom: 6px; letter-spacing: 1px; text-transform: uppercase; }
+  .pin-item { font-size: 12px; display: flex; justify-content: space-between; gap: 10px; margin-bottom: 3px; }
+  .pin-item .pid { color: #aaa; }
+  .pin-item .pangle { font-weight: 600; }
+  #bottom-bar { background: #111; padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; gap: 12px; }
+  #record-btn { width: 64px; height: 64px; border-radius: 50%; border: 4px solid #fff; background: transparent; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all 0.2s; }
+  #record-btn .inner { width: 48px; height: 48px; border-radius: 50%; background: #ff3333; transition: all 0.2s; }
+  #record-btn.recording .inner { border-radius: 8px; width: 28px; height: 28px; background: #ff3333; }
+  #timer { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 60px; }
+  #event-count { font-size: 13px; color: #ff9800; min-width: 80px; text-align: right; }
+  #report-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.92); z-index: 100; overflow-y: auto; padding: 20px; }
+  #report-modal.show { display: block; }
+  #report-content { background: #1a1a1a; border-radius: 16px; padding: 20px; max-width: 500px; margin: 0 auto; }
+  #report-content h2 { font-size: 18px; margin-bottom: 4px; }
+  #report-content .subtitle { font-size: 12px; color: #666; margin-bottom: 16px; }
+  .report-section { margin-bottom: 16px; }
+  .report-section h3 { font-size: 12px; color: #888; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 8px; border-bottom: 1px solid #2a2a2a; padding-bottom: 4px; }
+  .event-row { display: flex; justify-content: space-between; font-size: 13px; padding: 5px 0; border-bottom: 1px solid #1e1e1e; }
+  .event-row .etime { color: #aaa; }
+  .event-row .eangle { font-weight: 600; color: #ff3333; }
+  .event-row .epins { color: #888; font-size: 11px; }
+  .stat-row { display: flex; justify-content: space-between; font-size: 14px; padding: 5px 0; }
+  .stat-row .label { color: #888; }
+  .stat-row .value { font-weight: 600; }
+  .value.ok { color: #4caf50; }
+  .value.danger { color: #ff3333; }
+  #close-report { width: 100%; padding: 14px; background: #333; border: none; border-radius: 10px; color: #fff; font-size: 16px; cursor: pointer; margin-top: 8px; }
+  #new-session { width: 100%; padding: 14px; background: #ff3333; border: none; border-radius: 10px; color: #fff; font-size: 16px; cursor: pointer; margin-top: 8px; font-weight: 600; }
+  #loading-screen { position: fixed; inset: 0; background: #0a0a0a; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 200; gap: 16px; }
+  #loading-screen h2 { font-size: 20px; }
+  #loading-screen p { font-size: 13px; color: #666; text-align: center; padding: 0 40px; }
+  .spinner { width: 40px; height: 40px; border: 3px solid #333; border-top-color: #fff; border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #no-detect-hint { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.7); border-radius: 20px; padding: 8px 16px; font-size: 12px; color: #888; white-space: nowrap; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="loading-screen">
+  <div class="spinner"></div>
+  <h2>載入 OpenCV...</h2>
+  <p>首次載入約需 10–20 秒，請稍候</p>
+</div>
+<div id="status-bar">
+  <span id="status-text">等待攝影機...</span>
+  <span id="opencv-status">OpenCV 載入中</span>
+</div>
+<div id="camera-container">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="overlay"></canvas>
+  <div id="alert-overlay"></div>
+  <div id="angle-display">
+    <h3>最大角度差</h3>
+    <div id="max-angle-value" class="ok">--°</div>
+    <div id="max-angle-label">未偵測到 Pin</div>
+  </div>
+  <div id="pin-list">
+    <h3>偵測到的 Pin</h3>
+    <div id="pin-items"><div style="font-size:12px;color:#555">無</div></div>
+  </div>
+  <div id="no-detect-hint">將相機對準 Pin 標記</div>
+</div>
+<div id="bottom-bar">
+  <div id="timer">00:00</div>
+  <button id="record-btn"><div class="inner"></div></button>
+  <div id="event-count">警告: 0 次</div>
+</div>
+<div id="report-modal">
+  <div id="report-content">
+    <h2>📊 分析報告</h2>
+    <div class="subtitle" id="report-date"></div>
+    <div class="report-section">
+      <h3>整體結果</h3>
+      <div class="stat-row"><span class="label">錄影時長</span><span class="value" id="r-duration">--</span></div>
+      <div class="stat-row"><span class="label">最大角度差（峰值）</span><span class="value" id="r-maxangle">--</span></div>
+      <div class="stat-row"><span class="label">超過 10° 次數</span><span class="value" id="r-events">--</span></div>
+      <div class="stat-row"><span class="label">判定</span><span class="value" id="r-verdict">--</span></div>
+    </div>
+    <div class="report-section">
+      <h3>超標事件列表</h3>
+      <div id="r-event-list"></div>
+    </div>
+    <button id="close-report">關閉報告</button>
+    <button id="new-session">開始新一次檢測</button>
+  </div>
+</div>
+<script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady()"></script>
+<script>
+let cv=null,isRecording=false,recordStart=null,timerInterval=null,alertEvents=[],alertCount=0,lastAlertTime=-3000,processingFrame=false;
+const MARKER_SIZE_METERS=0.008,ANGLE_THRESHOLD=10.0,MIN_MARKERS=2;
+let cameraMatrix=null,distCoeffs=null;
+function onOpenCvReady(){
+  cv=window.cv;
+  document.getElementById('loading-screen').style.display='none';
+  document.getElementById('opencv-status').textContent='OpenCV ✓';
+  document.getElementById('opencv-status').classList.add('ready');
+  startCamera();
+}
+async function startCamera(){
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1280},height:{ideal:720}},audio:false});
+    const video=document.getElementById('video');
+    video.srcObject=stream;
+    video.onloadedmetadata=()=>{resizeOverlay();initCameraMatrix();document.getElementById('status-text').textContent='攝影機就緒';requestAnimationFrame(processFrame);};
+  }catch(e){document.getElementById('status-text').textContent='無法存取相機：'+e.message;}
+}
+function resizeOverlay(){const v=document.getElementById('video'),o=document.getElementById('overlay');o.width=v.videoWidth;o.height=v.videoHeight;}
+function initCameraMatrix(){
+  const v=document.getElementById('video'),w=v.videoWidth,h=v.videoHeight,f=Math.max(w,h);
+  cameraMatrix=cv.matFromArray(3,3,cv.CV_64F,[f,0,w/2,0,f,h/2,0,0,1]);
+  distCoeffs=cv.Mat.zeros(4,1,cv.CV_64F);
+}
+function processFrame(){
+  requestAnimationFrame(processFrame);
+  if(!cv||processingFrame)return;
+  const video=document.getElementById('video');
+  if(video.readyState<2)return;
+  processingFrame=true;
+  try{
+    const overlay=document.getElementById('overlay');
+    const ctx=overlay.getContext('2d');
+    ctx.clearRect(0,0,overlay.width,overlay.height);
+    const tempCanvas=document.createElement('canvas');
+    tempCanvas.width=video.videoWidth;tempCanvas.height=video.videoHeight;
+    const tctx=tempCanvas.getContext('2d');
+    tctx.drawImage(video,0,0);
+    const src=new cv.Mat(video.videoHeight,video.videoWidth,cv.CV_8UC4);
+    src.data.set(tctx.getImageData(0,0,tempCanvas.width,tempCanvas.height).data);
+    const gray=new cv.Mat();
+    cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);
+    const dictionary=new cv.aruco_Dictionary(cv.aruco.DICT_4X4_50);
+    const corners=new cv.MatVector(),ids=new cv.Mat(),rejected=new cv.MatVector(),parameters=new cv.aruco_DetectorParameters();
+    cv.aruco.detectMarkers(gray,dictionary,corners,ids,parameters,rejected);
+    const numMarkers=ids.rows;
+    if(numMarkers>=MIN_MARKERS){
+      document.getElementById('no-detect-hint').style.display='none';
+      const rvecs=new cv.Mat(),tvecs=new cv.Mat();
+      cv.aruco.estimatePoseSingleMarkers(corners,MARKER_SIZE_METERS,cameraMatrix,distCoeffs,rvecs,tvecs);
+      const axes=[],markerIds=[];
+      for(let i=0;i<numMarkers;i++){
+        const rvec=rvecs.row(i),rmat=new cv.Mat();
+        cv.Rodrigues(rvec,rmat);
+        axes.push([rmat.doubleAt(0,2),rmat.doubleAt(1,2),rmat.doubleAt(2,2)]);
+        markerIds.push(ids.intAt(i,0));
+        rmat.delete();rvec.delete();
+      }
+      let maxAngle=0,maxPair=[null,null];
+      for(let i=0;i<axes.length;i++)for(let j=i+1;j<axes.length;j++){const a=angleBetween(axes[i],axes[j]);if(a>maxAngle){maxAngle=a;maxPair=[markerIds[i],markerIds[j]];}}
+      drawMarkers(ctx,corners,ids,maxAngle,overlay.width,overlay.height,video.videoWidth,video.videoHeight);
+      updateUI(maxAngle,numMarkers,markerIds,axes);
+      const now=Date.now();
+      if(maxAngle>ANGLE_THRESHOLD){
+        document.getElementById('alert-overlay').classList.add('active');
+        if(isRecording&&(now-lastAlertTime)>2000){alertEvents.push({time:(now-recordStart)/1000,angle:maxAngle,pins:maxPair});alertCount++;lastAlertTime=now;document.getElementById('event-count').textContent='警告: '+alertCount+' 次';}
+      }else{document.getElementById('alert-overlay').classList.remove('active');}
+      rvecs.delete();tvecs.delete();
+    }else{
+      document.getElementById('no-detect-hint').style.display='block';
+      document.getElementById('alert-overlay').classList.remove('active');
+      updateUI(null,numMarkers,[],[]);
+    }
+    corners.delete();ids.delete();rejected.delete();gray.delete();src.delete();dictionary.delete();
+  }catch(e){}
+  processingFrame=false;
+}
+function angleBetween(a,b){const dot=a[0]*b[0]+a[1]*b[1]+a[2]*b[2],mA=Math.sqrt(a[0]**2+a[1]**2+a[2]**2),mB=Math.sqrt(b[0]**2+b[1]**2+b[2]**2);return Math.acos(Math.min(1,Math.max(-1,dot/(mA*mB))))*180/Math.PI;}
+function drawMarkers(ctx,corners,ids,maxAngle,cw,ch,vw,vh){
+  const sx=cw/vw,sy=ch/vh,color=maxAngle>ANGLE_THRESHOLD?'#ff3333':maxAngle>7?'#ff9800':'#4caf50';
+  for(let i=0;i<corners.size();i++){
+    const c=corners.get(i),pts=[];
+    for(let j=0;j<4;j++)pts.push({x:c.floatAt(0,j*2)*sx,y:c.floatAt(0,j*2+1)*sy});
+    ctx.beginPath();ctx.moveTo(pts[0].x,pts[0].y);
+    for(let j=1;j<4;j++)ctx.lineTo(pts[j].x,pts[j].y);
+    ctx.closePath();ctx.strokeStyle=color;ctx.lineWidth=3;ctx.stroke();
+    const cx=pts.reduce((s,p)=>s+p.x,0)/4,cy=pts.reduce((s,p)=>s+p.y,0)/4;
+    ctx.fillStyle=color;ctx.font='bold 14px sans-serif';ctx.textAlign='center';
+    ctx.fillText('#'+(ids.intAt(i,0)+1),cx,cy-8);
+    c.delete();
+  }
+  ctx.textAlign='left';
+}
+function updateUI(maxAngle,numMarkers,markerIds,axes){
+  const valEl=document.getElementById('max-angle-value'),labelEl=document.getElementById('max-angle-label'),pinItems=document.getElementById('pin-items');
+  if(maxAngle===null){valEl.textContent='--°';valEl.className='ok';labelEl.textContent=numMarkers===0?'未偵測到 Pin':'僅偵測到 '+numMarkers+' 支';pinItems.innerHTML='<div style="font-size:12px;color:#555">無</div>';return;}
+  valEl.textContent=maxAngle.toFixed(1)+'°';
+  if(maxAngle>ANGLE_THRESHOLD){valEl.className='danger';labelEl.textContent='⚠️ 超過 10° 限制！';}
+  else if(maxAngle>7){valEl.className='warn';labelEl.textContent='偵測到 '+numMarkers+' 支，接近上限';}
+  else{valEl.className='ok';labelEl.textContent='偵測到 '+numMarkers+' 支，角度 OK';}
+  let html='';
+  for(let i=0;i<markerIds.length;i++){const a=i===0?0:angleBetween(axes[0],axes[i]),color=a>ANGLE_THRESHOLD?'#ff3333':a>7?'#ff9800':'#4caf50';html+='<div class="pin-item"><span class="pid">Pin #'+(markerIds[i]+1)+'</span><span class="pangle" style="color:'+color+'">'+(i===0?'REF':a.toFixed(1)+'°')+'</span></div>';}
+  pinItems.innerHTML=html;
+}
+document.getElementById('record-btn').addEventListener('click',()=>{isRecording?stopRecording():startRecording();});
+function startRecording(){isRecording=true;recordStart=Date.now();alertEvents=[];alertCount=0;lastAlertTime=-3000;document.getElementById('record-btn').classList.add('recording');document.getElementById('event-count').textContent='警告: 0 次';document.getElementById('status-text').textContent='● 錄影中';timerInterval=setInterval(()=>{const e=Math.floor((Date.now()-recordStart)/1000);document.getElementById('timer').textContent=String(Math.floor(e/60)).padStart(2,'0')+':'+String(e%60).padStart(2,'0');},500);}
+function stopRecording(){isRecording=false;clearInterval(timerInterval);document.getElementById('record-btn').classList.remove('recording');document.getElementById('status-text').textContent='攝影機就緒';showReport();}
+function showReport(){
+  const dur=(Date.now()-recordStart)/1000;
+  document.getElementById('report-date').textContent=new Date().toLocaleString('zh-TW');
+  document.getElementById('r-duration').textContent=String(Math.floor(dur/60)).padStart(2,'0')+':'+String(Math.floor(dur%60)).padStart(2,'0');
+  const peak=alertEvents.length>0?Math.max(...alertEvents.map(e=>e.angle)):null;
+  const peakEl=document.getElementById('r-maxangle');
+  if(peak){peakEl.textContent=peak.toFixed(1)+'°';peakEl.className='value danger';}else{peakEl.textContent='< 10°（無超標）';peakEl.className='value ok';}
+  const evEl=document.getElementById('r-events');evEl.textContent=alertCount+' 次';evEl.className=alertCount>0?'value danger':'value ok';
+  const vEl=document.getElementById('r-verdict');if(alertCount===0){vEl.textContent='✅ 通過';vEl.className='value ok';}else{vEl.textContent='❌ 需調整';vEl.className='value danger';}
+  const listEl=document.getElementById('r-event-list');
+  if(alertEvents.length===0){listEl.innerHTML='<div style="font-size:13px;color:#555;padding:8px 0">無超標事件</div>';}
+  else{listEl.innerHTML=alertEvents.map(e=>'<div class="event-row"><span class="etime">'+String(Math.floor(e.time/60)).padStart(2,'0')+':'+String(Math.floor(e.time%60)).padStart(2,'0')+'</span><span class="eangle">'+e.angle.toFixed(1)+'°</span><span class="epins">Pin #'+(e.pins[0]+1)+' vs #'+(e.pins[1]+1)+'</span></div>').join('');}
+  document.getElementById('report-modal').classList.add('show');
+}
+document.getElementById('close-report').addEventListener('click',()=>document.getElementById('report-modal').classList.remove('show'));
+document.getElementById('new-session').addEventListener('click',()=>{document.getElementById('report-modal').classList.remove('show');document.getElementById('timer').textContent='00:00';document.getElementById('event-count').textContent='警告: 0 次';});
+window.addEventListener('resize',resizeOverlay);
+</script>
+</body>
+</html>
