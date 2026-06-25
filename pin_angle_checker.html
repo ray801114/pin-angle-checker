@@ -18,6 +18,10 @@
   #alert-overlay.active { opacity: 1; }
   #angle-display { position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,0.75); border-radius: 10px; padding: 10px 14px; min-width: 160px; backdrop-filter: blur(6px); }
   #angle-display h3 { font-size: 11px; color: #888; margin-bottom: 6px; letter-spacing: 1px; text-transform: uppercase; }
+  #pin-count-row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #2a2a2a; }
+  #pin-count-value { font-size: 30px; font-weight: 700; line-height: 1; color: #fff; }
+  #pin-count-value.low { color: #ff9800; }
+  #pin-count-unit { font-size: 12px; color: #888; }
   #max-angle-value { font-size: 36px; font-weight: 700; line-height: 1; }
   #max-angle-value.ok { color: #4caf50; }
   #max-angle-value.warn { color: #ff9800; }
@@ -75,6 +79,8 @@
   <canvas id="overlay"></canvas>
   <div id="alert-overlay"></div>
   <div id="angle-display">
+    <h3>偵測到 Pin 數</h3>
+    <div id="pin-count-row"><div id="pin-count-value" class="low">0</div><div id="pin-count-unit">根</div></div>
     <h3>最大角度差</h3>
     <div id="max-angle-value" class="ok">--°</div>
     <div id="max-angle-label">未偵測到 Pin</div>
@@ -206,7 +212,10 @@ function drawMarkers(ctx,corners,ids,maxAngle,cw,ch,vw,vh){
 }
 function updateUI(maxAngle,numMarkers,markerIds,axes){
   const valEl=document.getElementById('max-angle-value'),labelEl=document.getElementById('max-angle-label'),pinItems=document.getElementById('pin-items');
-  if(maxAngle===null){valEl.textContent='--°';valEl.className='ok';labelEl.textContent=numMarkers===0?'未偵測到 Pin':'僅偵測到 '+numMarkers+' 支';pinItems.innerHTML='<div style="font-size:12px;color:#555">無</div>';return;}
+  const countEl=document.getElementById('pin-count-value');
+  countEl.textContent=numMarkers;
+  countEl.className=numMarkers<MIN_MARKERS?'low':'';
+  if(maxAngle===null){valEl.textContent='--°';valEl.className='ok';labelEl.textContent=numMarkers===0?'未偵測到 Pin':'僅偵測到 '+numMarkers+' 支，需至少 '+MIN_MARKERS+' 支才能計算角度';pinItems.innerHTML='<div style="font-size:12px;color:#555">無</div>';return;}
   valEl.textContent=maxAngle.toFixed(1)+'°';
   if(maxAngle>ANGLE_THRESHOLD){valEl.className='danger';labelEl.textContent='⚠️ 超過 10° 限制！';}
   else if(maxAngle>7){valEl.className='warn';labelEl.textContent='偵測到 '+numMarkers+' 支，接近上限';}
