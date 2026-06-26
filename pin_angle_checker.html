@@ -197,7 +197,7 @@ document.getElementById('loading-screen').style.display='none';
 startCamera();
 async function startCamera(){
   try{
-    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1280},height:{ideal:720}},audio:false});
+    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1920},height:{ideal:1080}},audio:false});
     const video=document.getElementById('video');
     video.srcObject=stream;
     video.onloadedmetadata=()=>{resizeOverlay();focalLength=Math.max(video.videoWidth,video.videoHeight);document.getElementById('status-text').textContent='攝影機就緒';requestAnimationFrame(processFrame);};
@@ -218,6 +218,23 @@ function smoothAxis(id,rawAxis){
   for(let i=0;i<hist.length;i++){sx+=hist[i].v[0];sy+=hist[i].v[1];sz+=hist[i].v[2];}
   const cnt=hist.length||1;
   return[sx/cnt,sy/cnt,sz/cnt];
+}
+// 對偵測器給的整數像素角點做次像素精修（OpenCV cornerSubPix），降低角點定位噪訊，
+// 這是markers在畫面中佔像素少、且接近正對角度時，姿態角度抖動的主因之一。
+function refineCorners(grayMat,corners){
+  const pts=[];for(const c of corners){pts.push(c.x,c.y);}
+  const cornersMat=cv.matFromArray(corners.length,1,cv.CV_32FC2,pts);
+  const winSize=new cv.Size(5,5),zeroZone=new cv.Size(-1,-1);
+  const criteria=new cv.TermCriteria(cv.TERM_CRITERIA_EPS+cv.TERM_CRITERIA_COUNT,30,0.01);
+  let refined=corners;
+  try{
+    cv.cornerSubPix(grayMat,cornersMat,winSize,zeroZone,criteria);
+    const d=cornersMat.data32F;
+    refined=[];
+    for(let i=0;i<corners.length;i++)refined.push({x:d[i*2],y:d[i*2+1]});
+  }catch(e){console.error('cornerSubPix failed',e);}
+  finally{cornersMat.delete();}
+  return refined;
 }
 // 改用 OpenCV.js 的 solvePnP + SOLVEPNP_IPPE_SQUARE（IPPE 平面四點姿態演算法）取代自製 POSIT。
 // IPPE_SQUARE 是 OpenCV 內部 cv::aruco 本身也採用的演算法，專門處理「共平面四點」姿態的
@@ -271,11 +288,18 @@ function processFrame(){
     }else if(numMarkers>=MIN_MARKERS){
       document.getElementById('no-detect-hint').style.display='none';
       const axes=[],markerIds=[];
-      for(let i=0;i<markers.length;i++){
-        const rawAxis=poseAxis(markers[i].corners,video.videoWidth,video.videoHeight);
-        axes.push(smoothAxis(markers[i].id,rawAxis));
-        markerIds.push(markers[i].id);
-      }
+      const cvImg=cv.matFromImageData(imgData);
+      const grayMat=new cv.Mat();
+      cv.cvtColor(cvImg,grayMat,cv.COLOR_RGBA2GRAY);
+      cvImg.delete();
+      try{
+        for(let i=0;i<markers.length;i++){
+          const refined=refineCorners(grayMat,markers[i].corners);
+          const rawAxis=poseAxis(refined,video.videoWidth,video.videoHeight);
+          axes.push(smoothAxis(markers[i].id,rawAxis));
+          markerIds.push(markers[i].id);
+        }
+      }finally{grayMat.delete();}
       let maxAngle=0,maxPair=[null,null];
       for(let i=0;i<axes.length;i++)for(let j=i+1;j<axes.length;j++){const a=angleBetween(axes[i],axes[j]);if(a>maxAngle){maxAngle=a;maxPair=[markerIds[i],markerIds[j]];}}
       drawMarkers(ctx,markers,maxAngle,overlay.width,overlay.height,video.videoWidth,video.videoHeight);
