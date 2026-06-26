@@ -204,6 +204,22 @@ function poseAxis(corners,vw,vh){
   const pose=posit.pose(imagePoints);
   return pose.bestRotation[2];
 }
+const axisHistory={},AXIS_HISTORY_MS=1200,AXIS_HISTORY_MAX=15;
+function getSmoothedAxis(id,rawAxis){
+  const now=Date.now();
+  if(!axisHistory[id])axisHistory[id]=[];
+  const hist=axisHistory[id];
+  hist.push({t:now,v:rawAxis});
+  while(hist.length>0&&(now-hist[0].t>AXIS_HISTORY_MS||hist.length>AXIS_HISTORY_MAX))hist.shift();
+  let sx=0,sy=0,sz=0;
+  for(let i=0;i<hist.length;i++){
+    let v=hist[i].v;
+    const n=Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2])||1;
+    sx+=v[0]/n;sy+=v[1]/n;sz+=v[2]/n;
+  }
+  const cnt=hist.length||1;
+  return [sx/cnt,sy/cnt,sz/cnt];
+}
 function processFrame(){
   requestAnimationFrame(processFrame);
   if(processingFrame)return;
@@ -227,7 +243,8 @@ function processFrame(){
       document.getElementById('no-detect-hint').style.display='none';
       const axes=[],markerIds=[];
       for(let i=0;i<markers.length;i++){
-        axes.push(poseAxis(markers[i].corners,video.videoWidth,video.videoHeight));
+        const rawAxis=poseAxis(markers[i].corners,video.videoWidth,video.videoHeight);
+        axes.push(getSmoothedAxis(markers[i].id,rawAxis));
         markerIds.push(markers[i].id);
       }
       let maxAngle=0,maxPair=[null,null];
