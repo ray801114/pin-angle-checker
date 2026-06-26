@@ -72,7 +72,7 @@
 </div>
 <div id="status-bar">
   <span id="status-text">等待攝影機...</span>
-  <span id="opencv-status" class="ready">偵測引擎就緒</span>
+  <span id="opencv-status">姿態引擎載入中...</span>
 </div>
 <div id="camera-container">
   <video id="video" autoplay playsinline muted></video>
@@ -184,8 +184,15 @@ AR.Detector.prototype.rotate2=function(src,rotation){var dst=[],len=src.length,i
 let isRecording=false,recordStart=null,timerInterval=null,alertEvents=[],alertCount=0,lastAlertTime=-3000,processingFrame=false;
 let pinCountSamples=[],overallMaxAngle=null;
 const MARKER_MODEL_SIZE=8,ANGLE_THRESHOLD=10.0,MIN_MARKERS=2;
-let focalLength=null,detector=null;
+let focalLength=null,detector=null,cvReady=false;
 detector=new AR.Detector({dictionaryName:'DICT_4X4_50',maxHammingDistance:3});
+function onOpenCvReady(){
+  cv['onRuntimeInitialized']=()=>{
+    cvReady=true;
+    const st=document.getElementById('opencv-status');
+    st.textContent='姿態引擎就緒';st.className='ready';
+  };
+}
 document.getElementById('loading-screen').style.display='none';
 startCamera();
 async function startCamera(){
@@ -197,45 +204,45 @@ async function startCamera(){
   }catch(e){document.getElementById('status-text').textContent='無法存取相機：'+e.message;}
 }
 function resizeOverlay(){const v=document.getElementById('video'),o=document.getElementById('overlay');o.width=v.videoWidth;o.height=v.videoHeight;}
-function normVec(v){const n=Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2])||1;return[v[0]/n,v[1]/n,v[2]/n];}
 function dotVec(a,b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];}
-function poseAxis(corners,vw,vh){
-  const cx=vw/2,cy=vh/2;
-  const imagePoints=corners.map(c=>({x:c.x-cx,y:cy-c.y}));
-  const posit=new POS.Posit(MARKER_MODEL_SIZE,focalLength);
-  const pose=posit.pose(imagePoints);
-  // POSIT 對共平面四點的姿態本質上有兩組解（書本翻頁歧義），尤其在近正對視角時
-  // 兩組解的投影誤差非常接近，逐幀選「誤差較小」的那組會導致兩解之間隨機跳動。
-  // 改為：和上一幀「已採用」的法向量比較，挑選方向較接近（連續）的那組解，
-  // 並做正負號統一，避免法向量在 +/- 之間翻轉造成平均時互相抵銷。
-  const best=normVec(pose.bestRotation[2]);
-  const alt=normVec(pose.alternativeRotation[2]);
-  return{best,alt};
-}
-const axisHistory={},lastSelectedAxis={},AXIS_HISTORY_MS=1200,AXIS_HISTORY_MAX=15;
-function selectAndSmoothAxis(id,axisCandidates){
-  let chosen=axisCandidates.best;
-  const last=lastSelectedAxis[id];
-  if(last){
-    const dBest=dotVec(axisCandidates.best,last);
-    const dAlt=dotVec(axisCandidates.alt,last);
-    chosen=dAlt>dBest?axisCandidates.alt:axisCandidates.best;
-    if(dotVec(chosen,last)<0)chosen=[-chosen[0],-chosen[1],-chosen[2]];
-  }
-  lastSelectedAxis[id]=chosen;
+const axisHistory={},AXIS_HISTORY_MS=1200,AXIS_HISTORY_MAX=15;
+function smoothAxis(id,rawAxis){
   const now=Date.now();
   if(!axisHistory[id])axisHistory[id]=[];
   const hist=axisHistory[id];
-  hist.push({t:now,v:chosen});
+  let v=rawAxis;
+  if(hist.length>0){const last=hist[hist.length-1].v;if(dotVec(v,last)<0)v=[-v[0],-v[1],-v[2]];}
+  hist.push({t:now,v:v});
   while(hist.length>0&&(now-hist[0].t>AXIS_HISTORY_MS||hist.length>AXIS_HISTORY_MAX))hist.shift();
   let sx=0,sy=0,sz=0;
-  for(let i=0;i<hist.length;i++){
-    let v=hist[i].v;
-    if(dotVec(v,chosen)<0)v=[-v[0],-v[1],-v[2]];
-    sx+=v[0];sy+=v[1];sz+=v[2];
-  }
+  for(let i=0;i<hist.length;i++){sx+=hist[i].v[0];sy+=hist[i].v[1];sz+=hist[i].v[2];}
   const cnt=hist.length||1;
   return[sx/cnt,sy/cnt,sz/cnt];
+}
+// 改用 OpenCV.js 的 solvePnP + SOLVEPNP_IPPE_SQUARE（IPPE 平面四點姿態演算法）取代自製 POSIT。
+// IPPE_SQUARE 是 OpenCV 內部 cv::aruco 本身也採用的演算法，專門處理「共平面四點」姿態的
+// 雙解歧義，並用嚴謹的重投影誤差比較選出正確解，比自製 POSIT 在近正對角度時穩定得多。
+// 角點順序需與 objectPoints 對應：偵測器回傳的 corners 固定為「順時針，從左上開始」。
+function poseAxis(corners,vw,vh){
+  const half=MARKER_MODEL_SIZE/2;
+  const objectPoints=cv.matFromArray(4,1,cv.CV_32FC3,[-half,half,0, half,half,0, half,-half,0, -half,-half,0]);
+  const imagePoints=cv.matFromArray(4,1,cv.CV_32FC2,[corners[0].x,corners[0].y, corners[1].x,corners[1].y, corners[2].x,corners[2].y, corners[3].x,corners[3].y]);
+  const f=focalLength,cx=vw/2,cy=vh/2;
+  const cameraMatrix=cv.matFromArray(3,3,cv.CV_64F,[f,0,cx, 0,f,cy, 0,0,1]);
+  const distCoeffs=cv.Mat.zeros(4,1,cv.CV_64F);
+  const rvec=new cv.Mat(),tvec=new cv.Mat();
+  let axis=[0,0,1];
+  try{
+    cv.solvePnP(objectPoints,imagePoints,cameraMatrix,distCoeffs,rvec,tvec,false,cv.SOLVEPNP_IPPE_SQUARE);
+    const rotMat=new cv.Mat();
+    cv.Rodrigues(rvec,rotMat);
+    const d=rotMat.data64F;
+    axis=[d[2],d[5],d[8]];
+    rotMat.delete();
+  }finally{
+    objectPoints.delete();imagePoints.delete();cameraMatrix.delete();distCoeffs.delete();rvec.delete();tvec.delete();
+  }
+  return axis;
 }
 function processFrame(){
   requestAnimationFrame(processFrame);
@@ -256,12 +263,17 @@ function processFrame(){
     const markers=detector.detect(image);
     const numMarkers=markers.length;
     if(isRecording)pinCountSamples.push(numMarkers);
-    if(numMarkers>=MIN_MARKERS){
+    if(numMarkers>=MIN_MARKERS&&!cvReady){
+      document.getElementById('no-detect-hint').style.display='block';
+      document.getElementById('no-detect-hint').textContent='姿態運算引擎載入中，請稍候...';
+      document.getElementById('alert-overlay').classList.remove('active');
+      updateUI(null,numMarkers,[],[]);
+    }else if(numMarkers>=MIN_MARKERS){
       document.getElementById('no-detect-hint').style.display='none';
       const axes=[],markerIds=[];
       for(let i=0;i<markers.length;i++){
-        const axisCandidates=poseAxis(markers[i].corners,video.videoWidth,video.videoHeight);
-        axes.push(selectAndSmoothAxis(markers[i].id,axisCandidates));
+        const rawAxis=poseAxis(markers[i].corners,video.videoWidth,video.videoHeight);
+        axes.push(smoothAxis(markers[i].id,rawAxis));
         markerIds.push(markers[i].id);
       }
       let maxAngle=0,maxPair=[null,null];
@@ -275,7 +287,8 @@ function processFrame(){
         if(isRecording&&(now-lastAlertTime)>2000){alertEvents.push({time:(now-recordStart)/1000,angle:maxAngle,pins:maxPair});alertCount++;lastAlertTime=now;document.getElementById('event-count').textContent='警告: '+alertCount+' 次';}
       }else{document.getElementById('alert-overlay').classList.remove('active');}
     }else{
-      document.getElementById('no-detect-hint').style.display='block';
+      const hintEl=document.getElementById('no-detect-hint');
+      hintEl.style.display='block';hintEl.textContent='將相機對準 Pin 標記';
       document.getElementById('alert-overlay').classList.remove('active');
       updateUI(null,numMarkers,[],[]);
     }
@@ -341,5 +354,6 @@ document.getElementById('close-report').addEventListener('click',()=>document.ge
 document.getElementById('new-session').addEventListener('click',()=>{document.getElementById('report-modal').classList.remove('show');document.getElementById('timer').textContent='00:00';document.getElementById('event-count').textContent='警告: 0 次';});
 window.addEventListener('resize',resizeOverlay);
 </script>
+<script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady()"></script>
 </body>
 </html>
