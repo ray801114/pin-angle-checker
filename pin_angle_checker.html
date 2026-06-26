@@ -164,6 +164,13 @@ function processFrame(){
     cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);
     const dictionary=new cv.aruco_Dictionary(cv.aruco.DICT_4X4_50);
     const corners=new cv.MatVector(),ids=new cv.Mat(),rejected=new cv.MatVector(),parameters=new cv.aruco_DetectorParameters();
+    parameters.minMarkerPerimeterRate=0.01;
+    parameters.maxMarkerPerimeterRate=4.0;
+    parameters.polygonalApproxAccuracyRate=0.08;
+    parameters.adaptiveThreshWinSizeMin=3;
+    parameters.adaptiveThreshWinSizeMax=43;
+    parameters.adaptiveThreshWinSizeStep=4;
+    parameters.cornerRefinementMethod=1;
     cv.aruco.detectMarkers(gray,dictionary,corners,ids,parameters,rejected);
     const numMarkers=ids.rows;
     if(isRecording)pinCountSamples.push(numMarkers);
