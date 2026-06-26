@@ -197,28 +197,45 @@ async function startCamera(){
   }catch(e){document.getElementById('status-text').textContent='無法存取相機：'+e.message;}
 }
 function resizeOverlay(){const v=document.getElementById('video'),o=document.getElementById('overlay');o.width=v.videoWidth;o.height=v.videoHeight;}
+function normVec(v){const n=Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2])||1;return[v[0]/n,v[1]/n,v[2]/n];}
+function dotVec(a,b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];}
 function poseAxis(corners,vw,vh){
   const cx=vw/2,cy=vh/2;
   const imagePoints=corners.map(c=>({x:c.x-cx,y:cy-c.y}));
   const posit=new POS.Posit(MARKER_MODEL_SIZE,focalLength);
   const pose=posit.pose(imagePoints);
-  return pose.bestRotation[2];
+  // POSIT 對共平面四點的姿態本質上有兩組解（書本翻頁歧義），尤其在近正對視角時
+  // 兩組解的投影誤差非常接近，逐幀選「誤差較小」的那組會導致兩解之間隨機跳動。
+  // 改為：和上一幀「已採用」的法向量比較，挑選方向較接近（連續）的那組解，
+  // 並做正負號統一，避免法向量在 +/- 之間翻轉造成平均時互相抵銷。
+  const best=normVec(pose.bestRotation[2]);
+  const alt=normVec(pose.alternativeRotation[2]);
+  return{best,alt};
 }
-const axisHistory={},AXIS_HISTORY_MS=1200,AXIS_HISTORY_MAX=15;
-function getSmoothedAxis(id,rawAxis){
+const axisHistory={},lastSelectedAxis={},AXIS_HISTORY_MS=1200,AXIS_HISTORY_MAX=15;
+function selectAndSmoothAxis(id,axisCandidates){
+  let chosen=axisCandidates.best;
+  const last=lastSelectedAxis[id];
+  if(last){
+    const dBest=dotVec(axisCandidates.best,last);
+    const dAlt=dotVec(axisCandidates.alt,last);
+    chosen=dAlt>dBest?axisCandidates.alt:axisCandidates.best;
+    if(dotVec(chosen,last)<0)chosen=[-chosen[0],-chosen[1],-chosen[2]];
+  }
+  lastSelectedAxis[id]=chosen;
   const now=Date.now();
   if(!axisHistory[id])axisHistory[id]=[];
   const hist=axisHistory[id];
-  hist.push({t:now,v:rawAxis});
+  hist.push({t:now,v:chosen});
   while(hist.length>0&&(now-hist[0].t>AXIS_HISTORY_MS||hist.length>AXIS_HISTORY_MAX))hist.shift();
   let sx=0,sy=0,sz=0;
   for(let i=0;i<hist.length;i++){
     let v=hist[i].v;
-    const n=Math.sqrt(v[0]*v[0]+v[1]*v[1]+v[2]*v[2])||1;
-    sx+=v[0]/n;sy+=v[1]/n;sz+=v[2]/n;
+    if(dotVec(v,chosen)<0)v=[-v[0],-v[1],-v[2]];
+    sx+=v[0];sy+=v[1];sz+=v[2];
   }
   const cnt=hist.length||1;
-  return [sx/cnt,sy/cnt,sz/cnt];
+  return[sx/cnt,sy/cnt,sz/cnt];
 }
 function processFrame(){
   requestAnimationFrame(processFrame);
@@ -243,8 +260,8 @@ function processFrame(){
       document.getElementById('no-detect-hint').style.display='none';
       const axes=[],markerIds=[];
       for(let i=0;i<markers.length;i++){
-        const rawAxis=poseAxis(markers[i].corners,video.videoWidth,video.videoHeight);
-        axes.push(getSmoothedAxis(markers[i].id,rawAxis));
+        const axisCandidates=poseAxis(markers[i].corners,video.videoWidth,video.videoHeight);
+        axes.push(selectAndSmoothAxis(markers[i].id,axisCandidates));
         markerIds.push(markers[i].id);
       }
       let maxAngle=0,maxPair=[null,null];
