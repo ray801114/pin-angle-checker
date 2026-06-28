@@ -240,13 +240,25 @@ function refineCorners(grayMat,corners){
 // IPPE_SQUARE 是 OpenCV 內部 cv::aruco 本身也採用的演算法，專門處理「共平面四點」姿態的
 // 雙解歧義，並用嚴謹的重投影誤差比較選出正確解，比自製 POSIT 在近正對角度時穩定得多。
 // 角點順序需與 objectPoints 對應：偵測器回傳的 corners 固定為「順時針，從左上開始」。
+//
+// 相機內參：用 iPhone 13 mini 實際拍攝 9 張棋盤格照片（10x7 方格，每格 25mm），
+// 以 OpenCV cv2.calibrateCamera 校正得出（RMS 重投影誤差 ~1.3px，K3 固定為 0 以避免
+// 過度擬合導致數值不穩定）。校正照片解析度為 4032x3024（iOS 相機 App 4:3 拍照模式）。
+// 畸變係數 (k1,k2,p1,p2,k3) 是無單位的正規化座標係數，與解析度無關，可直接套用；
+// 焦距與主點則隨實際拍攝解析度等比例縮放（假設 getUserMedia 影像流與拍照模式共用
+// 相同水平視角，僅做等比例縮放/裁切，這是目前沒有用影片串流本身校正下的近似）。
+const CALIB_IMG_W=4032,CALIB_IMG_H=3024;
+const CALIB_FX=3142.2996470,CALIB_FY=3154.2416543;
+const CALIB_DIST=[0.18327084,-0.72789763,0.00155199,-0.00083183,0];
 function poseAxis(corners,vw,vh){
   const half=MARKER_MODEL_SIZE/2;
   const objectPoints=cv.matFromArray(4,1,cv.CV_32FC3,[-half,half,0, half,half,0, half,-half,0, -half,-half,0]);
   const imagePoints=cv.matFromArray(4,1,cv.CV_32FC2,[corners[0].x,corners[0].y, corners[1].x,corners[1].y, corners[2].x,corners[2].y, corners[3].x,corners[3].y]);
-  const f=focalLength,cx=vw/2,cy=vh/2;
-  const cameraMatrix=cv.matFromArray(3,3,cv.CV_64F,[f,0,cx, 0,f,cy, 0,0,1]);
-  const distCoeffs=cv.Mat.zeros(4,1,cv.CV_64F);
+  const scale=vw/CALIB_IMG_W;
+  const f=focalLength,cx=vw/2,cy=vh/2; // 保留變數名稱供下方備援使用
+  const fx=CALIB_FX*scale,fy=CALIB_FY*scale;
+  const cameraMatrix=cv.matFromArray(3,3,cv.CV_64F,[fx,0,cx, 0,fy,cy, 0,0,1]);
+  const distCoeffs=cv.matFromArray(5,1,cv.CV_64F,CALIB_DIST);
   const rvec=new cv.Mat(),tvec=new cv.Mat();
   let axis=[0,0,1];
   try{
