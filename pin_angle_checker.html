@@ -185,7 +185,12 @@ let isRecording=false,recordStart=null,timerInterval=null,alertEvents=[],alertCo
 let pinCountSamples=[],overallMaxAngle=null;
 const MARKER_MODEL_SIZE=8,ANGLE_THRESHOLD=10.0,MIN_MARKERS=2;
 let focalLength=null,detector=null,cvReady=false;
-detector=new AR.Detector({dictionaryName:'DICT_4X4_50',maxHammingDistance:3});
+// maxHammingDistance 原本設 3，太寬鬆：DICT_4X4_50 每個 code 只有 16 bit，容許糾錯距離 3
+// 等於背景雜訊（地毯紋路、手、陰影等隨機紋理產生的候選四邊形）有相當高機率被誤判成
+// 合法但錯誤的 dictionary code。實測畫面證實 pin 數量會無端跳到 8、11，甚至出現
+// 「Pin #46」這種根本不存在於我們 6 根實體標記中的 ID，這就是背景誤判，不是姿態
+// 演算法的問題。改成 1（只容許極小幅雜訊更正，幾乎等同精確比對）大幅降低假陽性。
+detector=new AR.Detector({dictionaryName:'DICT_4X4_50',maxHammingDistance:1});
 function onOpenCvReady(){
   cv['onRuntimeInitialized']=()=>{
     cvReady=true;
@@ -306,7 +311,18 @@ function processFrame(){
     tctx.drawImage(video,0,0);
     const imgData=tctx.getImageData(0,0,tempCanvas.width,tempCanvas.height);
     const image=new CV.Image(tempCanvas.width,tempCanvas.height,imgData.data);
-    const markers=detector.detect(image);
+    let markers=detector.detect(image);
+    // 二次防呆：(1) 我們實際只有 6 根標記，ID 固定是 0-5，任何其他 ID 一定是背景誤判，直接丟棄。
+    // (2) 同一個 ID 在同一畫面出現兩次以上，代表某個候選四邊形被重複判讀（例如同一根標記的
+    // 內外邊界都被當成獨立候選），保留面積最大的那個（真正的標記外框面積通常最大）。
+    markers=markers.filter(m=>m.id>=0&&m.id<=5);
+    function quadArea(corners){let a=0;for(let i=0;i<4;i++){const p=corners[i],q=corners[(i+1)%4];a+=p.x*q.y-q.x*p.y;}return Math.abs(a/2);}
+    const byId={};
+    for(const m of markers){
+      const area=quadArea(m.corners);
+      if(!byId[m.id]||area>byId[m.id]._area){m._area=area;byId[m.id]=m;}
+    }
+    markers=Object.values(byId);
     const numMarkers=markers.length;
     if(isRecording)pinCountSamples.push(numMarkers);
     if(numMarkers>=MIN_MARKERS&&!cvReady){
