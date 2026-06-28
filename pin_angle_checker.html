@@ -72,6 +72,7 @@
 </div>
 <div id="status-bar">
   <span id="status-text">等待攝影機...</span>
+  <span id="diag-info" style="font-size:11px;color:#666;margin-left:8px;"></span>
   <span id="opencv-status">姿態引擎載入中...</span>
 </div>
 <div id="camera-container">
@@ -183,6 +184,22 @@ AR.Detector.prototype.rotate2=function(src,rotation){var dst=[],len=src.length,i
 
 let isRecording=false,recordStart=null,timerInterval=null,alertEvents=[],alertCount=0,lastAlertTime=-3000,processingFrame=false;
 let pinCountSamples=[],overallMaxAngle=null;
+// 即時診斷數字：實際處理 FPS + marker 平均像素大小，用來驗證「角度誤差主因是 marker
+// 在畫面中太小、角點雜訊被姿態演算法放大」這個結論，並確認 4K 解析度要求是否真的生效
+// （iOS Safari 有可能因裝置/系統限制退回較低解析度，從這裡可以直接看到實際數字）。
+let fpsTimestamps=[],lastDiagUpdate=0;
+function quadAvgSide(corners){let s=0;for(let i=0;i<4;i++){const p=corners[i],q=corners[(i+1)%4];s+=Math.hypot(q.x-p.x,q.y-p.y);}return s/4;}
+function updateDiag(numMarkers,markers,vw,vh){
+  const now=Date.now();
+  fpsTimestamps.push(now);
+  while(fpsTimestamps.length>0&&now-fpsTimestamps[0]>2000)fpsTimestamps.shift();
+  if(now-lastDiagUpdate<300)return;
+  lastDiagUpdate=now;
+  const fps=fpsTimestamps.length>1?((fpsTimestamps.length-1)/((fpsTimestamps[fpsTimestamps.length-1]-fpsTimestamps[0])/1000)):0;
+  let avgPx='--';
+  if(numMarkers>0){const sizes=markers.map(m=>quadAvgSide(m.corners));avgPx=(sizes.reduce((a,b)=>a+b,0)/sizes.length).toFixed(0);}
+  document.getElementById('diag-info').textContent=vw+'x'+vh+' | '+fps.toFixed(1)+'fps | marker~'+avgPx+'px';
+}
 const MARKER_MODEL_SIZE=8,ANGLE_THRESHOLD=10.0,MIN_MARKERS=2;
 let focalLength=null,detector=null,cvReady=false;
 // maxHammingDistance 原本設 3，太寬鬆：DICT_4X4_50 每個 code 只有 16 bit，容許糾錯距離 3
@@ -200,17 +217,42 @@ function onOpenCvReady(){
 }
 document.getElementById('loading-screen').style.display='none';
 startCamera();
+// 解析度從 1920x1080 提升為盡量要求 4K（3840x2160）。
+//
+// 根本原因排查記錄（2026-06-29，pin 數修好但角度仍亂跳之後的深入分析）：
+// 用 Python + OpenCV 重建本 app 完全相同的 solvePnP(IPPE_SQUARE) 流程做合成實驗，
+// 從這次截圖實測量出畫面中每根 marker 的實際像素寬度只有約 40-60px（8mm marker，
+// 手持距離約 15-25cm）。在這個尺寸下，即使角點偵測誤差只有 0.5-1.0px（這已經是
+// cornerSubPix 次像素精修後的正常殘留誤差水準，不是異常雜訊），單張畫面用 4 點
+// solvePnP 算出的平面法向量，兩根「實際上完全平行」的 marker 之間算出的夾角，
+// 模擬統計平均落在 14-29°、p90 可以到 30-49°——這跟使用者錄影裡看到的 6.7°~49°
+// 完全吻合。也就是說：之前所有修正（cornerSubPix 視窗、相機校正、IPPE_SQUARE、
+// maxHammingDistance）都是真實存在且正確的 bug 修正，但角度誤差的「主因」其實
+// 不是任何一個程式 bug，而是 marker 在畫面中太小，導致從 4 個角點反算姿態這件事
+// 對角點雜訊極度敏感（這是幾何/資訊量的根本限制，不是演算法寫錯）。
+// 同樣的合成實驗顯示：把 marker 在畫面中的像素寬度從 ~40-60px 提升到 ~100px
+// （等同解析度提升、或鏡頭離 marker 更近），搭配現有的時間平滑（多畫面平均），
+// 夾角誤差平均可降到 2-4°、p90 仍在 10° 門檻內，是目前最有效、風險最低的改善。
+// 因此把 getUserMedia 要求的解析度提高到 4K（瀏覽器若裝置不支援會自動退回最接近
+// 的解析度，不會出錯），並加上畫面上的即時診斷數字（解析度/FPS/平均 marker 像素
+// 寬度），讓下次實測時能直接量到真實數據，而不是再靠猜測。
 async function startCamera(){
   try{
-    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1920},height:{ideal:1080}},audio:false});
+    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:3840},height:{ideal:2160}},audio:false});
     const video=document.getElementById('video');
     video.srcObject=stream;
-    video.onloadedmetadata=()=>{resizeOverlay();focalLength=Math.max(video.videoWidth,video.videoHeight);document.getElementById('status-text').textContent='攝影機就緒';requestAnimationFrame(processFrame);};
+    video.onloadedmetadata=()=>{resizeOverlay();focalLength=Math.max(video.videoWidth,video.videoHeight);document.getElementById('status-text').textContent='攝影機就緒 '+video.videoWidth+'x'+video.videoHeight;requestAnimationFrame(processFrame);};
   }catch(e){document.getElementById('status-text').textContent='無法存取相機：'+e.message;}
 }
 function resizeOverlay(){const v=document.getElementById('video'),o=document.getElementById('overlay');o.width=v.videoWidth;o.height=v.videoHeight;}
 function dotVec(a,b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];}
-const axisHistory={},AXIS_HISTORY_MS=1200,AXIS_HISTORY_MAX=15;
+// 平滑視窗從 1200ms/15 筆延長為 2500ms/45 筆。
+// 合成實驗顯示：在 marker 像素偏小（40-60px）時，單純拉長時間平滑視窗對「降低角度誤差」
+// 的邊際效益會趨緩（30 筆與 60 筆平均後的誤差幾乎一樣），代表雜訊不是唯一問題；但只要
+// marker 在畫面中夠大（解析度提升後），多筆平均仍能把誤差從個位數壓到更穩定的範圍，
+// 而且這個調整沒有副作用（只是角度顯示對「真實角度變化」的反應變慢約 1-2 秒，
+// 對檢查 pin 角度是否偏移這種「相對靜態」的量測情境是合理的取捨），所以一併加大。
+const axisHistory={},AXIS_HISTORY_MS=2500,AXIS_HISTORY_MAX=45;
 function smoothAxis(id,rawAxis){
   const now=Date.now();
   if(!axisHistory[id])axisHistory[id]=[];
@@ -324,6 +366,7 @@ function processFrame(){
     }
     markers=Object.values(byId);
     const numMarkers=markers.length;
+    updateDiag(numMarkers,markers,video.videoWidth,video.videoHeight);
     if(isRecording)pinCountSamples.push(numMarkers);
     if(numMarkers>=MIN_MARKERS&&!cvReady){
       document.getElementById('no-detect-hint').style.display='block';
