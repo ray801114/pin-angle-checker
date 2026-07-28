@@ -216,8 +216,8 @@ const MARKER_SIZE_MM = 8;
 const ANGLE_THRESHOLD = 10.0;
 const MIN_MARKERS = 2;
 const CALIB_GRID_W = 4, CALIB_GRID_H = 4;
-const CALIB_CELLS_TARGET = 12;
-const CALIB_OBS_TARGET = 40;
+const CALIB_CELLS_TARGET = 8;
+const CALIB_OBS_TARGET = 25;
 const CALIB_SAMPLE_MS = 500;
 const AXIS_HISTORY_MS = 2500, AXIS_HISTORY_MAX = 45;
 
@@ -354,7 +354,7 @@ function updateCalibUI(){
   const p=getCalibProgress(),pct=Math.round(p*100);
   document.getElementById('calib-bar-fill').style.width=pct+'%';
   document.getElementById('calib-pct').textContent=pct+'%';
-  document.getElementById('calib-cell-label').textContent='涵蓋格數: '+coveredCells.size+' / '+CALIB_CELLS_TARGET;
+  document.getElementById('calib-cell-label').textContent='格:'+coveredCells.size+'/'+CALIB_CELLS_TARGET+'  筆:'+calibObs.length+'/'+CALIB_OBS_TARGET;
   for(let i=0;i<CALIB_GRID_W*CALIB_GRID_H;i++){
     const el=document.getElementById('cc'+i);if(el)el.classList.toggle('hit',coveredCells.has(i));
   }
@@ -365,7 +365,7 @@ function collectCalibObs(markers,grayMat,vw,vh){
   if(now-lastSampleTime<CALIB_SAMPLE_MS)return;
   lastSampleTime=now;
   for(const m of markers){
-    const refined=refineCorners(grayMat,m.corners);
+    const refined=grayMat?refineCorners(grayMat,m.corners):m.corners;
     const cx=refined.reduce((s,c)=>s+c.x,0)/4;
     const cy=refined.reduce((s,c)=>s+c.y,0)/4;
     const cellX=Math.min(CALIB_GRID_W-1,Math.floor(cx/vw*CALIB_GRID_W));
@@ -471,10 +471,14 @@ function processFrame(){
       drawOutlines(ctx,markers,'#2196f3',overlay.width,overlay.height,vw,vh);
       const hint=document.getElementById('no-detect-hint');
       hint.style.display=markers.length===0?'block':'none';
-      if(markers.length>=1&&cvReady){
-        const ci=cv.matFromImageData(imgData),gm=new cv.Mat();
-        cv.cvtColor(ci,gm,cv.COLOR_RGBA2GRAY);ci.delete();
-        try{collectCalibObs(markers,gm,vw,vh);}finally{gm.delete();}
+      if(markers.length>=1){
+        if(cvReady){
+          const ci=cv.matFromImageData(imgData),gm=new cv.Mat();
+          cv.cvtColor(ci,gm,cv.COLOR_RGBA2GRAY);ci.delete();
+          try{collectCalibObs(markers,gm,vw,vh);}finally{gm.delete();}
+        }else{
+          collectCalibObs(markers,null,vw,vh);
+        }
       }
     }
     // 量測模式
