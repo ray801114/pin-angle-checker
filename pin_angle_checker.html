@@ -227,6 +227,7 @@ let calibObs = [];        // 每筆: [[x,y]×4] 精修後的影像角點
 let coveredCells = new Set();
 let lastSampleTime = 0;
 let calibFx, calibFy, calibCx, calibCy, calibDist;
+let calibNextTrigger = CALIB_OBS_TARGET;
 
 let isRecording=false, recordStart=null, timerInterval=null;
 let alertEvents=[], alertCount=0, lastAlertTime=-3000;
@@ -347,14 +348,14 @@ function poseAxis(corners,vw,vh){
 
 // ==================== 校正邏輯 ====================
 function getCalibProgress(){
-  return Math.min(1, calibObs.length/CALIB_OBS_TARGET);
+  return Math.min(1, calibObs.length/calibNextTrigger);
 }
 
 function updateCalibUI(){
   const p=getCalibProgress(),pct=Math.round(p*100);
   document.getElementById('calib-bar-fill').style.width=pct+'%';
   document.getElementById('calib-pct').textContent=pct+'%';
-  document.getElementById('calib-cell-label').textContent='格:'+coveredCells.size+'/'+CALIB_CELLS_TARGET+'  筆:'+calibObs.length+'/'+CALIB_OBS_TARGET;
+  document.getElementById('calib-cell-label').textContent='格:'+coveredCells.size+'/'+CALIB_CELLS_TARGET+'  筆:'+calibObs.length+'/'+calibNextTrigger;
   for(let i=0;i<CALIB_GRID_W*CALIB_GRID_H;i++){
     const el=document.getElementById('cc'+i);if(el)el.classList.toggle('hit',coveredCells.has(i));
   }
@@ -374,7 +375,7 @@ function collectCalibObs(markers,grayMat,vw,vh){
     calibObs.push(refined.map(c=>[c.x,c.y]));
   }
   updateCalibUI();
-  if(getCalibProgress()>=1.0&&appState==='calibrating'){
+  if(calibObs.length>=calibNextTrigger&&appState==='calibrating'){
     appState='computing';
     document.getElementById('status-text').textContent='正在計算相機校正…';
     setTimeout(()=>runCalibration(vw,vh),200);
@@ -397,7 +398,7 @@ function runCalibration(vw,vh){
     rms=cv.calibrateCamera(ov,iv,new cv.Size(vw,vh),K,D,rv,tv);
     const fx=K.data64F[0],fy=K.data64F[4],cx=K.data64F[2],cy=K.data64F[5];
     // 合理性檢查：焦距應在 0.3x–4x 畫面寬，主點應在畫面內
-    if(rms<8&&fx>vw*0.3&&fx<vw*4&&cx>vw*0.05&&cx<vw*0.95){
+    if(rms<30&&fx>vw*0.2&&fx<vw*6&&cx>0&&cx<vw){
       calibFx=fx;calibFy=fy;calibCx=cx;calibCy=cy;
       calibDist=Array.from({length:5},(_,i)=>D.data64F[i]||0);
       ok=true;
@@ -420,15 +421,17 @@ function runCalibration(vw,vh){
     const st=document.getElementById('opencv-status');st.textContent='已校正 ✓';st.className='ready';
     document.getElementById('status-text').textContent='校正完成 (RMS '+rms.toFixed(2)+'px)';
   }else{
-    appState='calibrating';calibObs=[];coveredCells=new Set();lastSampleTime=0;
-    document.getElementById('status-text').textContent='校正未收斂，請繼續掃描';
+    appState='calibrating';
+    calibNextTrigger=calibObs.length+10;
+    const reason=rms<0?'計算錯誤':(rms>=30?'RMS '+rms.toFixed(0)+'px':'焦距異常');
+    document.getElementById('status-text').textContent='校正未達標('+reason+')，請繼續移動手機';
     updateCalibUI();
   }
 }
 
 function startRecalib(){
   for(const k of Object.keys(axisHistory))delete axisHistory[k];
-  appState='calibrating';calibObs=[];coveredCells=new Set();lastSampleTime=0;
+  appState='calibrating';calibObs=[];coveredCells=new Set();lastSampleTime=0;calibNextTrigger=CALIB_OBS_TARGET;
   document.getElementById('calib-overlay').style.display='flex';
   document.getElementById('angle-display').style.display='none';
   document.getElementById('pin-list').style.display='none';
