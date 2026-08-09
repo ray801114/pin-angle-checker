@@ -107,7 +107,7 @@ body { background:#0a0a0a; color:#fff; font-family:-apple-system,sans-serif; hei
   <div id="calib-overlay">
     <div id="calib-panel">
       <div id="calib-title">相機自動校正</div>
-      <div id="calib-instruction">慢慢移動鏡頭，讓每根 Pin 出現在畫面各個位置，偶爾稍微傾斜手機</div>
+      <div id="calib-instruction">慢慢移動鏡頭靠近或繞行 Pin，偶爾稍微傾斜手機，收集 25 筆即自動完成</div>
       <div id="calib-bar-bg"><div id="calib-bar-fill"></div></div>
       <div id="calib-status-row">
         <span id="calib-pct">0%</span>
@@ -347,7 +347,7 @@ function poseAxis(corners,vw,vh){
 
 // ==================== 校正邏輯 ====================
 function getCalibProgress(){
-  return Math.min(Math.min(1,coveredCells.size/CALIB_CELLS_TARGET),Math.min(1,calibObs.length/CALIB_OBS_TARGET));
+  return Math.min(1, calibObs.length/CALIB_OBS_TARGET);
 }
 
 function updateCalibUI(){
