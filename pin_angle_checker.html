@@ -423,7 +423,7 @@ function runCalibration(vw,vh){
     document.getElementById('timer').textContent='00:00';
     document.getElementById('no-detect-hint').textContent='將相機對準 Pin 標記';
     const st=document.getElementById('opencv-status');st.textContent='已校正 ✓';st.className='ready';
-    document.getElementById('status-text').textContent='rms===-2?'校正完成 (估算焦距)':'校正完成 (RMS '+rms.toFixed(2)+'px)'';
+    document.getElementById('status-text').textContent=rms===-2?'校正完成 (估算焦距)':'校正完成 (RMS '+rms.toFixed(2)+'px)';
   }else{
     appState='calibrating';
     calibNextTrigger=calibObs.length+10;
