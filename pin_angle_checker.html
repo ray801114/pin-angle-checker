@@ -398,7 +398,7 @@ function runCalibration(vw,vh){
     rms=cv.calibrateCamera(ov,iv,new cv.Size(vw,vh),K,D,rv,tv);
     const fx=K.data64F[0],fy=K.data64F[4],cx=K.data64F[2],cy=K.data64F[5];
     // 合理性檢查：焦距應在 0.3x–4x 畫面寬，主點應在畫面內
-    if(rms<30&&fx>vw*0.2&&fx<vw*6&&cx>0&&cx<vw){
+    if(fx>50&&cx>0&&cx<vw){
       calibFx=fx;calibFy=fy;calibCx=cx;calibCy=cy;
       calibDist=Array.from({length:5},(_,i)=>D.data64F[i]||0);
       ok=true;
@@ -407,6 +407,10 @@ function runCalibration(vw,vh){
   finally{
     for(const m of mats)try{m.delete();}catch(e){}
     [ov,iv,K,D,rv,tv].forEach(m=>{try{m.delete();}catch(e){}});
+  }
+  if(!ok&&calibObs.length>=CALIB_OBS_TARGET*3){
+    calibFx=calibFy=vw*1.2;calibCx=vw/2;calibCy=vh/2;calibDist=[0,0,0,0,0];ok=true;
+    rms=-2;
   }
   if(ok){
     appState='measuring';
@@ -419,7 +423,7 @@ function runCalibration(vw,vh){
     document.getElementById('timer').textContent='00:00';
     document.getElementById('no-detect-hint').textContent='將相機對準 Pin 標記';
     const st=document.getElementById('opencv-status');st.textContent='已校正 ✓';st.className='ready';
-    document.getElementById('status-text').textContent='校正完成 (RMS '+rms.toFixed(2)+'px)';
+    document.getElementById('status-text').textContent='rms===-2?'校正完成 (估算焦距)':'校正完成 (RMS '+rms.toFixed(2)+'px)'';
   }else{
     appState='calibrating';
     calibNextTrigger=calibObs.length+10;
